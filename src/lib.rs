@@ -11,29 +11,36 @@ use modular_bitfield::prelude::*;
 #[cfg(feature = "defmt")]
 use defmt::{debug, error, bitflags};
 
+#[cfg(feature = "tracing")]
+use tracing::{debug, error};
+
 #[cfg(not(feature = "defmt"))]
 use bitflags::bitflags;
 
-#[cfg(not(feature = "defmt"))]
-use tracing::{debug, error};
 
 /// Base address for the MCP4661, set the lower 3 bits to match the device A[0:2] pins
 pub const BASE_ADDR: u8 = 0b0101000;
 
-/// Error bounds when `defmt` feature is enabled
-#[cfg(feature = "defmt")]
-pub trait ErrorBounds: core::error::Error + defmt::Format {}
-
-/// Error bounds when `defmt` feature is disabled
-#[cfg(not(feature = "defmt"))]
-pub trait ErrorBounds: core::error::Error {}
-
-/// Default ErrorBounds impl for everything
-#[cfg(feature = "defmt")]
-impl <T: core::error::Error + defmt::Format > ErrorBounds for T {}
-
-#[cfg(not(feature = "defmt"))]
-impl <T: core::error::Error > ErrorBounds for T {}
+// Setup error bounds depending on enabled features
+cfg_if::cfg_if! {
+    if #[cfg(all(feature = "thiserror", feature = "defmt"))] {
+        /// Error bounds when `thiserror` and `defmt` features are enabled
+        pub trait ErrorBounds: core::error::Error + defmt::Format {}
+        impl <T: core::error::Error + defmt::Format > ErrorBounds for T {}
+    } else if #[cfg(feature = "thiserror")] {
+        /// Error bounds when `thiserror` feature is enabled
+        pub trait ErrorBounds: core::error::Error {}
+        impl <T: core::error::Error > ErrorBounds for T {}
+    } else if #[cfg(feature = "defmt")] {
+        /// Error bounds when `defmt` feature is enabled
+        pub trait ErrorBounds: defmt::Format {}
+        impl <T: defmt::Format > ErrorBounds for T {}
+    } else {
+        /// Error bounds when `thiserror` and `defmt` features are disabled
+        pub trait ErrorBounds {}
+        impl <T> ErrorBounds for T {}
+    }
+}
 
 /// Mcp6xxx device
 pub struct Mcp4xxx<I: I2c> {
@@ -115,6 +122,7 @@ bitflags! {
 /// Mcp4xxx errors
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "thiserror", derive(thiserror::Error))]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Mcp4xxxError<E: ErrorBounds> {
     #[cfg_attr(feature = "thiserror", error("Configuration failed"))]
     Config,
@@ -132,9 +140,11 @@ where
         let mut buff = [0u8; 1];
         match i2c.read(addr, &mut buff) {
             Ok(_) => {
+                #[cfg(any(feature = "tracing", feature = "defmt"))]
                 debug!("MCP4661 (0x{:x}) read OK!", addr);
             },
             Err(e) => {
+                #[cfg(any(feature = "tracing", feature = "defmt"))]
                 error!("MCP4661 (0x{:x}) I2C comms failed: {}", addr, e);
                 return Err(Mcp4xxxError::I2c(e));
             }
@@ -149,6 +159,7 @@ where
 
     /// Configure the device using the TCON register
     pub fn configure(&mut self, tcon: Tcon) -> Result<(), Mcp4xxxError<<I as ErrorType>::Error>> {
+        #[cfg(any(feature = "tracing", feature = "defmt"))]
         debug!("MCP4661 CFG {:?}", tcon);
 
         // Write TCON register
@@ -159,6 +170,7 @@ where
         let tcon_read = Tcon::from_bits_truncate(read);
 
         if tcon != tcon_read {
+            #[cfg(any(feature = "tracing", feature = "defmt"))]
             error!("TCON write mismatch wrote {:?} received {:?}", tcon, tcon_read);
             return Err(Mcp4xxxError::Config);
         }
@@ -189,13 +201,18 @@ where
 
         let wr = [cmd.bytes[0], data as u8];
 
+        #[cfg(feature = "defmt")]
+        debug!("MCP4661 write {:02x}", wr);
+        #[cfg(feature = "tracing")]
         debug!("MCP4661 write {:02x?}", wr);
 
         match self.i2c.write(self.addr, &wr) {
             Ok(_) => {
+                #[cfg(any(feature = "tracing", feature = "defmt"))]
                 debug!("MCP4661 ({:02x}) write OK!", self.addr);
             },
             Err(e) => {
+                #[cfg(any(feature = "tracing", feature = "defmt"))]
                 error!("MCP4661 ({:02x}) I2C comms failed: {}", self.addr, e);
                 return Err(Mcp4xxxError::I2c(e));
             }
@@ -211,9 +228,13 @@ where
         let mut buff = [0u8; 2];
         match self.i2c.write_read(self.addr, &cmd.bytes, &mut buff) {
             Ok(_) => {
+                #[cfg(feature = "defmt")]
+                debug!("MCP4661 (0x{:02x}) read: {:02x}", self.addr, buff);
+                #[cfg(feature = "tracing")]
                 debug!("MCP4661 (0x{:02x}) read: {:02x?}", self.addr, buff);
             },
             Err(e) => {
+                #[cfg(any(feature = "tracing", feature = "defmt"))]
                 error!("MCP4661 (0x{:02x}) I2C comms failed: {}", self.addr, e);
                 return Err(Mcp4xxxError::I2c(e));
             }
